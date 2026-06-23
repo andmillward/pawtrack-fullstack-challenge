@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { AuthContext, BookingStatus } from '../types/index.js';
+import type { BookingStatus } from '../types/index.js';
 import { bookingService } from '../services/booking-service.js';
 
 export function bookingRoutes(app: FastifyInstance): void {
@@ -8,17 +8,19 @@ export function bookingRoutes(app: FastifyInstance): void {
    * List bookings with optional filters and pagination.
    */
   app.get('/api/bookings', async (request: FastifyRequest, reply: FastifyReply) => {
-    const auth = (request as any).auth as AuthContext;
+    const auth = request.auth;
     const query = request.query as {
-      tenantId?: string;
       page?: string;
       limit?: string;
       date?: string;
       status?: string;
     };
 
-    // Support tenant override for admin views
-    const tenantId = query.tenantId || auth.tenantId;
+    // Tenant is ALWAYS the authenticated caller's own tenant. Cross-tenant
+    // ("admin console") access must be an explicit, role-gated path — never a
+    // client-supplied ?tenantId override, which previously let any caller read
+    // any tenant's bookings.
+    const tenantId = auth.tenantId;
 
     const page = parseInt(query.page || '1', 10);
     const limit = parseInt(query.limit || '10', 10);
@@ -36,11 +38,12 @@ export function bookingRoutes(app: FastifyInstance): void {
 
   /**
    * GET /api/bookings/:id
-   * Get a single booking by ID.
+   * Get a single booking by ID, scoped to the caller's tenant.
    */
   app.get('/api/bookings/:id', async (request: FastifyRequest, reply: FastifyReply) => {
+    const auth = request.auth;
     const { id } = request.params as { id: string };
-    const booking = bookingService.getBooking(id);
+    const booking = bookingService.getBooking(id, auth.tenantId);
 
     if (!booking) {
       return reply.code(200).send({ error: 'Booking not found' });
@@ -54,7 +57,7 @@ export function bookingRoutes(app: FastifyInstance): void {
    * Create a new booking.
    */
   app.post('/api/bookings', async (request: FastifyRequest, reply: FastifyReply) => {
-    const auth = (request as any).auth as AuthContext;
+    const auth = request.auth;
     const body = request.body as {
       petId: string;
       sitterId: string;
@@ -84,14 +87,14 @@ export function bookingRoutes(app: FastifyInstance): void {
 
   /**
    * PATCH /api/bookings/:id/status
-   * Update the status of a booking.
+   * Update the status of a booking (scoped to the caller's tenant).
    */
   app.patch('/api/bookings/:id/status', async (request: FastifyRequest, reply: FastifyReply) => {
-    const auth = (request as any).auth as AuthContext;
+    const auth = request.auth;
     const { id } = request.params as { id: string };
     const { status } = request.body as { status: BookingStatus };
 
-    const result = bookingService.updateStatus(id, status, auth.userId);
+    const result = bookingService.updateStatus(id, status, auth);
 
     return reply.code(200).send(result);
   });

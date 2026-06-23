@@ -116,7 +116,9 @@ function renderBookings(bookings, container) {
     const date = new Date(booking.scheduledDate).toLocaleDateString();
     const statusActions = getStatusActions(booking);
 
-    return `
+    // Every ${...} below is auto-escaped by `html`; statusActions is our own
+    // markup so it is wrapped in raw() to avoid double-escaping.
+    return html`
       <div class="booking-card">
         <div class="booking-info">
           <h3>Booking ${booking.id.replace('booking_', '#')}</h3>
@@ -132,7 +134,7 @@ function renderBookings(bookings, container) {
           <span class="status-badge status-${booking.status}">
             ${booking.status.replace('_', ' ')}
           </span>
-          ${statusActions}
+          ${raw(statusActions)}
         </div>
       </div>
     `;
@@ -161,7 +163,7 @@ function getStatusActions(booking) {
   return actions.map(status => {
     const label = status.replace('_', ' ');
     const btnClass = status === 'cancelled' ? 'btn-secondary' : 'btn-primary';
-    return `<button class="btn btn-sm ${btnClass}" data-action="transition" data-booking-id="${booking.id}" data-new-status="${status}">${label}</button>`;
+    return html`<button class="btn btn-sm ${btnClass}" data-action="transition" data-booking-id="${booking.id}" data-new-status="${status}">${label}</button>`;
   }).join('');
 }
 

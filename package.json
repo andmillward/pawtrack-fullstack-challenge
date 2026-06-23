@@ -6,6 +6,7 @@
     "dev:server": "cd server && npm run dev",
     "dev:client": "npx serve client -l 3000 --cors",
     "dev": "echo 'Run dev:server and dev:client in separate terminals'",
-    "install:all": "cd server && npm install"
+    "install:all": "cd server && npm install",
+    "test": "node --test client/safe-html.test.js && npm --prefix server test"
   }
 }

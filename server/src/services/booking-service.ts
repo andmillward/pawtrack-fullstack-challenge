@@ -2,6 +2,7 @@ import { v4 as uuid } from 'uuid';
 import type { Booking, BookingStatus, PaginatedResult, AuthContext } from '../types/index.js';
 import { VALID_TRANSITIONS } from '../types/index.js';
 import { store } from '../store/memory-store.js';
+import { scopeToTenant } from './authorization.js';
 import { eventBus } from './event-emitter.js';
 
 interface ListBookingsParams {
@@ -121,13 +122,17 @@ export class BookingService {
 
   /**
    * Update booking status with transition validation.
+   *
+   * The booking is resolved through the caller's tenant scope, so a booking
+   * belonging to another tenant is indistinguishable from one that does not
+   * exist ('Booking not found') — no cross-tenant reads or writes.
    */
   public updateStatus(
     bookingId: string,
     newStatus: BookingStatus,
-    changedBy: string,
+    auth: AuthContext,
   ): { success: boolean; booking?: Booking; error?: string } {
-    const booking = store.getBooking(bookingId);
+    const booking = scopeToTenant(store.getBooking(bookingId), auth.tenantId);
 
     if (!booking) {
       return { success: false, error: 'Booking not found' };
@@ -147,7 +152,7 @@ export class BookingService {
       status: newStatus,
       updatedAt: new Date().toISOString(),
       statusChangedAt: new Date().toISOString(),
-      statusChangedBy: changedBy,
+      statusChangedBy: auth.userId,
     };
 
     store.updateBooking(updatedBooking);
@@ -157,17 +162,19 @@ export class BookingService {
       bookingId: updatedBooking.id,
       previousStatus: booking.status,
       newStatus,
-      changedBy,
+      changedBy: auth.userId,
     });
 
     return { success: true, booking: updatedBooking };
   }
 
   /**
-   * Get a single booking by ID.
+   * Get a single booking by ID, scoped to the caller's tenant. Returns
+   * undefined for both missing and other-tenant bookings (no existence
+   * disclosure across tenants).
    */
-  public getBooking(bookingId: string): Booking | undefined {
-    return store.getBooking(bookingId);
+  public getBooking(bookingId: string, tenantId: string): Booking | undefined {
+    return scopeToTenant(store.getBooking(bookingId), tenantId);
   }
 }
 

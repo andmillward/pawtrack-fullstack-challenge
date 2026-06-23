@@ -1,0 +1,8 @@
+{
+  // Production build config: same options as tsconfig.json but excludes test
+  // files so `npm run build` never emits *.test.* into dist/. The IDE and
+  // `npm run typecheck` use tsconfig.json, which DOES include tests (with
+  // esModuleInterop), so test files are still type-checked.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

@@ -1,3 +1,8 @@
+/** Any resource scoped to a single tenant. */
+export interface TenantOwned {
+  tenantId: string;
+}
+
 export interface Tenant {
   id: string;
   name: string;

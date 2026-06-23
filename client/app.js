@@ -91,14 +91,14 @@ async function fetchBookings(currentFilters) {
 
     loadingEl.style.display = 'none';
 
-    if (result.error) {
-      errorEl.textContent = result.error;
+    if (!response.ok) {
+      errorEl.textContent = (result.error && result.error.message) || 'Failed to load bookings.';
       errorEl.style.display = 'block';
       return;
     }
 
     renderBookings(result.data, listEl);
-    renderPagination(result);
+    renderPagination(result.meta);
   } catch (err) {
     loadingEl.style.display = 'none';
     errorEl.textContent = 'Failed to load bookings. Is the server running?';
@@ -176,11 +176,11 @@ async function transitionStatus(bookingId, newStatus) {
     });
     const result = await response.json();
 
-    if (result.success) {
+    if (response.ok) {
       showToast(`Booking updated to ${newStatus.replace('_', ' ')}`, 'success');
       fetchBookings(filters);
     } else {
-      showToast(result.error || 'Failed to update status', 'error');
+      showToast((result.error && result.error.message) || 'Failed to update status', 'error');
     }
   } catch (err) {
     showToast('Network error. Please try again.', 'error');
@@ -191,14 +191,15 @@ async function transitionStatus(bookingId, newStatus) {
 // Pagination
 // ============================================
 
-function renderPagination(result) {
+function renderPagination(meta) {
   const paginationEl = document.getElementById('pagination');
-  const { page, totalPages } = result;
 
-  if (totalPages <= 1) {
+  if (!meta || meta.totalPages <= 1) {
     paginationEl.innerHTML = '';
     return;
   }
+
+  const { page, totalPages } = meta;
 
   let html = '';
   html += `<button ${page <= 1 ? 'disabled' : ''} onclick="goToPage(${page - 1})">Prev</button>`;
@@ -299,13 +300,13 @@ async function createBooking() {
     });
     const result = await response.json();
 
-    if (result.success) {
+    if (response.ok) {
       showToast('Booking created!', 'success');
       modal.style.display = 'none';
       form.reset();
       fetchBookings(filters);
     } else {
-      showToast(result.error || 'Failed to create booking', 'error');
+      showToast((result.error && result.error.message) || 'Failed to create booking', 'error');
     }
   } catch (err) {
     showToast('Network error. Please try again.', 'error');

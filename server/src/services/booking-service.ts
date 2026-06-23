@@ -3,6 +3,7 @@ import type { Booking, BookingStatus, PaginatedResult, AuthContext } from '../ty
 import { VALID_TRANSITIONS } from '../types/index.js';
 import { store } from '../store/memory-store.js';
 import { scopeToTenant } from './authorization.js';
+import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { eventBus } from './event-emitter.js';
 
 interface ListBookingsParams {
@@ -37,28 +38,36 @@ export class BookingService {
     // Filter by date if provided
     if (date) {
       // Match bookings on the requested date
-      bookings = bookings.filter(b => b.scheduledDate.startsWith(date));
+      bookings = bookings.filter((booking) => booking.scheduledDate.startsWith(date));
     }
 
     // Filter by status if provided
     if (status) {
-      bookings = bookings.filter(b => b.status === status);
+      bookings = bookings.filter((booking) => booking.status === status);
     }
 
     // Sort by scheduled date descending (newest first)
-    bookings.sort((a, b) => new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime());
+    bookings.sort(
+      (first, second) =>
+        new Date(second.scheduledDate).getTime() - new Date(first.scheduledDate).getTime(),
+    );
 
     const total = bookings.length;
-    const totalPages = Math.ceil(total / limit);
+    // Pagination is 1-based: page 1 starts at offset 0. Clamp defensively for
+    // callers outside the schema-validated HTTP layer (where page/limit could
+    // be < 1). Previously `offset = page * limit` skipped the entire first page.
+    const safeLimit = Math.max(1, limit);
+    const safePage = Math.max(1, page);
+    const totalPages = Math.ceil(total / safeLimit);
 
-    const offset = page * limit;
-    const paginatedBookings = bookings.slice(offset, offset + limit);
+    const offset = (safePage - 1) * safeLimit;
+    const paginatedBookings = bookings.slice(offset, offset + safeLimit);
 
     return {
       data: paginatedBookings,
       total,
-      page,
-      limit,
+      page: safePage,
+      limit: safeLimit,
       totalPages,
     };
   }
@@ -70,14 +79,35 @@ export class BookingService {
   public async createBooking(params: CreateBookingParams): Promise<Booking> {
     const { tenantId, petId, sitterId, scheduledDate, startTime, endTime, notes, createdBy } = params;
 
+    // Referential integrity: pet and sitter must exist AND belong to the
+    // caller's tenant. Resolved through the same tenant scope as reads, so a
+    // booking can never reference another tenant's (or a nonexistent) pet or
+    // sitter. Schema validation guarantees the fields are present; only the
+    // data layer knows ownership.
+    if (!scopeToTenant(store.getPet(petId), tenantId)) {
+      throw new ValidationError('Unknown pet for this tenant');
+    }
+    if (!scopeToTenant(store.getSitter(sitterId), tenantId)) {
+      throw new ValidationError('Unknown sitter for this tenant');
+    }
+
+    // Temporal sanity. Full duration/overnight handling is T4; here we only
+    // reject an unparseable date and a zero-length slot.
+    if (Number.isNaN(Date.parse(scheduledDate))) {
+      throw new ValidationError('Invalid scheduledDate');
+    }
+    if (startTime === endTime) {
+      throw new ValidationError('endTime must differ from startTime');
+    }
+
     // Check for overlapping bookings with the same sitter
     const existingBookings = store.getAllBookings().filter(
-      b => b.sitterId === sitterId && b.status !== 'cancelled',
+      (booking) => booking.sitterId === sitterId && booking.status !== 'cancelled',
     );
 
-    const hasOverlap = existingBookings.some(b => {
-      const existingStart = new Date(`${b.scheduledDate.split('T')[0]}T${b.startTime}`);
-      const existingEnd = new Date(`${b.scheduledDate.split('T')[0]}T${b.endTime}`);
+    const hasOverlap = existingBookings.some((existing) => {
+      const existingStart = new Date(`${existing.scheduledDate.split('T')[0]}T${existing.startTime}`);
+      const existingEnd = new Date(`${existing.scheduledDate.split('T')[0]}T${existing.endTime}`);
       const newStart = new Date(`${scheduledDate.split('T')[0]}T${startTime}`);
       const newEnd = new Date(`${scheduledDate.split('T')[0]}T${endTime}`);
 
@@ -85,7 +115,7 @@ export class BookingService {
     });
 
     if (hasOverlap) {
-      throw new Error('Sitter has an overlapping booking for this time slot');
+      throw new ConflictError('Sitter has an overlapping booking for this time slot');
     }
 
     // Simulate async operation (like a database write)
@@ -131,19 +161,18 @@ export class BookingService {
     bookingId: string,
     newStatus: BookingStatus,
     auth: AuthContext,
-  ): { success: boolean; booking?: Booking; error?: string } {
+  ): Booking {
     const booking = scopeToTenant(store.getBooking(bookingId), auth.tenantId);
 
     if (!booking) {
-      return { success: false, error: 'Booking not found' };
+      throw new NotFoundError('Booking not found');
     }
 
     const allowedTransitions = VALID_TRANSITIONS[booking.status];
     if (!allowedTransitions.includes(newStatus)) {
-      return {
-        success: false,
-        error: `Cannot transition from '${booking.status}' to '${newStatus}'`,
-      };
+      throw new ConflictError(
+        `Cannot transition from '${booking.status}' to '${newStatus}'`,
+      );
     }
 
     // Overwrite status — no history kept
@@ -157,7 +186,6 @@ export class BookingService {
 
     store.updateBooking(updatedBooking);
 
-    // Overwrite status and notify listeners
     eventBus.emit('booking.statusChanged', {
       bookingId: updatedBooking.id,
       previousStatus: booking.status,
@@ -165,7 +193,7 @@ export class BookingService {
       changedBy: auth.userId,
     });
 
-    return { success: true, booking: updatedBooking };
+    return updatedBooking;
   }
 
   /**

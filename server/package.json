@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "node --import tsx --test src/services/authorization.test.ts"
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/services/authorization.test.ts src/routes/http.test.ts"
   },
   "dependencies": {
     "fastify": "^5.2.0",

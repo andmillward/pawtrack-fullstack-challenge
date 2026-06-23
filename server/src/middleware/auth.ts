@@ -1,6 +1,7 @@
-import type { FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyRequest } from 'fastify';
 import type { AuthContext } from '../types/index.js';
 import { store } from '../store/memory-store.js';
+import { UnauthorizedError } from '../lib/errors.js';
 
 const VALID_ROLES: ReadonlyArray<AuthContext['role']> = ['admin', 'staff', 'sitter'];
 
@@ -30,34 +31,22 @@ function parseRole(raw: string | undefined): AuthContext['role'] | undefined {
  *   X-User-Id: the user identifier
  *   X-User-Role: admin | staff | sitter (defaults to staff)
  */
-export async function authMiddleware(
-  request: FastifyRequest,
-  reply: FastifyReply,
-): Promise<void> {
+export async function authMiddleware(request: FastifyRequest): Promise<void> {
   const tenantId = request.headers['x-tenant-id'] as string | undefined;
   const userId = request.headers['x-user-id'] as string | undefined;
 
   if (!tenantId || !userId) {
-    return reply.code(401).send({
-      error: 'Unauthorized',
-      message: 'Missing X-Tenant-Id or X-User-Id headers',
-    });
+    throw new UnauthorizedError('Missing X-Tenant-Id or X-User-Id headers');
   }
 
   const tenant = store.getTenant(tenantId);
   if (!tenant) {
-    return reply.code(401).send({
-      error: 'Unauthorized',
-      message: 'Invalid tenant',
-    });
+    throw new UnauthorizedError('Invalid tenant');
   }
 
   const role = parseRole(request.headers['x-user-role'] as string | undefined);
   if (!role) {
-    return reply.code(401).send({
-      error: 'Unauthorized',
-      message: 'Invalid X-User-Role',
-    });
+    throw new UnauthorizedError('Invalid X-User-Role');
   }
 
   // Attach typed auth context for downstream handlers (see types/fastify.d.ts).

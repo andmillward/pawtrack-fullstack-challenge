@@ -89,6 +89,20 @@ export function bookingRoutes(app: FastifyInstance): void {
   );
 
   /**
+   * GET /api/bookings/:id/history
+   * Immutable status history for a booking, oldest first (tenant-scoped).
+   */
+  app.get(
+    '/api/bookings/:id/history',
+    { schema: { params: idParams } },
+    async (request, reply) => {
+      const auth = request.auth;
+      const { id } = request.params as { id: string };
+      return sendData(reply, bookingService.getStatusHistory(id, auth.tenantId));
+    },
+  );
+
+  /**
    * POST /api/bookings
    * Create a new booking. Returns 201 with the created resource.
    */

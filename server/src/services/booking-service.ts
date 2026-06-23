@@ -1,8 +1,15 @@
 import { v4 as uuid } from 'uuid';
-import type { Booking, BookingStatus, PaginatedResult, AuthContext } from '../types/index.js';
+import type {
+  Booking,
+  BookingStatus,
+  BookingStatusEvent,
+  PaginatedResult,
+  AuthContext,
+} from '../types/index.js';
 import { VALID_TRANSITIONS } from '../types/index.js';
 import { store } from '../store/memory-store.js';
 import { scopeToTenant } from './authorization.js';
+import { auditLog } from './audit-log.js';
 import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { eventBus } from './event-emitter.js';
 
@@ -140,6 +147,19 @@ export class BookingService {
 
     store.createBooking(booking);
 
+    // Audit: record creation as the first status event. Written in the same
+    // synchronous unit as the insert above; in a real DB these commit in one
+    // transaction, so history can never drift from state.
+    auditLog.record({
+      id: `event_${uuid().slice(0, 8)}`,
+      bookingId: booking.id,
+      tenantId: booking.tenantId,
+      previousStatus: null,
+      newStatus: booking.status,
+      changedBy: createdBy,
+      changedAt: now,
+    });
+
     eventBus.emit('booking.created', {
       bookingId: booking.id,
       tenantId: booking.tenantId,
@@ -175,16 +195,31 @@ export class BookingService {
       );
     }
 
-    // Overwrite status — no history kept
+    const changedAt = new Date().toISOString();
     const updatedBooking: Booking = {
       ...booking,
       status: newStatus,
-      updatedAt: new Date().toISOString(),
-      statusChangedAt: new Date().toISOString(),
+      updatedAt: changedAt,
+      // statusChangedAt/By stay on the row as a denormalised "last change"
+      // pointer; the full history lives in the append-only audit log below.
+      statusChangedAt: changedAt,
       statusChangedBy: auth.userId,
     };
 
     store.updateBooking(updatedBooking);
+
+    // Audit: append the transition to the immutable history instead of letting
+    // the previous statusChangedBy/At be overwritten and lost. Same unit as the
+    // write above (one DB transaction in production).
+    auditLog.record({
+      id: `event_${uuid().slice(0, 8)}`,
+      bookingId: updatedBooking.id,
+      tenantId: updatedBooking.tenantId,
+      previousStatus: booking.status,
+      newStatus,
+      changedBy: auth.userId,
+      changedAt,
+    });
 
     eventBus.emit('booking.statusChanged', {
       bookingId: updatedBooking.id,
@@ -203,6 +238,20 @@ export class BookingService {
    */
   public getBooking(bookingId: string, tenantId: string): Booking | undefined {
     return scopeToTenant(store.getBooking(bookingId), tenantId);
+  }
+
+  /**
+   * Return a booking's immutable status history, oldest first. Scoped to the
+   * caller's tenant — a missing or other-tenant booking raises NotFound, so the
+   * history endpoint discloses nothing across tenants.
+   */
+  public getStatusHistory(bookingId: string, tenantId: string): BookingStatusEvent[] {
+    if (!scopeToTenant(store.getBooking(bookingId), tenantId)) {
+      throw new NotFoundError('Booking not found');
+    }
+    return auditLog
+      .listForBooking(bookingId)
+      .sort((first, second) => first.changedAt.localeCompare(second.changedAt));
   }
 }
 

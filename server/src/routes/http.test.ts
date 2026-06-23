@@ -2,6 +2,8 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../app.js';
 import { store } from '../store/memory-store.js';
+import { auditLog } from '../services/audit-log.js';
+import type { BookingStatusEvent } from '../types/index.js';
 
 const PORTLAND = { 'x-tenant-id': 'tenant_portland', 'x-user-id': 'user_staff_portland' };
 
@@ -12,7 +14,10 @@ function makeApp() {
 // Seed is a shared singleton; reset before each test so created/updated rows
 // from one test never leak into the next. In a production situation we'd use
 // an in memory DB for testing, separate from the actual data store.
-beforeEach(() => store.reset());
+beforeEach(() => {
+  store.reset();
+  auditLog.reset();
+});
 
 test('GET list → 200 with { data, meta } envelope', async () => {
   const app = makeApp();
@@ -132,6 +137,44 @@ test('PATCH valid transition → 200 with new status', async () => {
   });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().data.status, 'confirmed');
+  await app.close();
+});
+
+test('GET history → records creation and each transition, oldest first', async () => {
+  const app = makeApp();
+  // Create a fresh booking, then transition it, then read its history.
+  const created = (await app.inject({
+    method: 'POST',
+    url: '/api/bookings',
+    headers: PORTLAND,
+    payload: { petId: 'pet_002', sitterId: 'sitter_001', scheduledDate: '2026-05-02T09:00:00Z', startTime: '06:00', endTime: '07:00' },
+  })).json();
+  const bookingId = created.data.id;
+
+  await app.inject({
+    method: 'PATCH',
+    url: `/api/bookings/${bookingId}/status`,
+    headers: PORTLAND,
+    payload: { status: 'confirmed' },
+  });
+
+  const response = await app.inject({ method: 'GET', url: `/api/bookings/${bookingId}/history`, headers: PORTLAND });
+  assert.equal(response.statusCode, 200);
+  const events = response.json().data as BookingStatusEvent[];
+  assert.equal(events.length, 2);
+  assert.deepEqual(
+    events.map((event) => [event.previousStatus, event.newStatus]),
+    [[null, 'requested'], ['requested', 'confirmed']],
+  );
+  assert.equal(events[1].changedBy, 'user_staff_portland');
+  await app.close();
+});
+
+test('cross-tenant history → 404', async () => {
+  const app = makeApp();
+  // booking_007 belongs to Seattle
+  const response = await app.inject({ method: 'GET', url: '/api/bookings/booking_007/history', headers: PORTLAND });
+  assert.equal(response.statusCode, 404);
   await app.close();
 });
 

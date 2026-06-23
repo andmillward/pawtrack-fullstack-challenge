@@ -1,0 +1,108 @@
+### PawTrack — Audit history requests
+# Format: JetBrains HTTP Client (the green ▶ run arrow appears next to each request).
+# Start the API first:  cd server && npm run dev    (listens on http://localhost:3001)
+#
+# Auth is the header stub: X-Tenant-Id + X-User-Id identify the caller.
+# The dashboard uses tenant_portland / user_staff_portland.
+
+@baseUrl = http://localhost:3001
+@tenantId = tenant_portland
+@userId = user_staff_portland
+
+
+### Just in case
+GET {{baseUrl}}/health
+
+
+### 1. List booking for tenant and find an id and its current status
+GET {{baseUrl}}/api/bookings?page=1&limit=100
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{userId}}
+
+
+### 2. Audit history for ONE booking  ← the main query
+# Swap booking_005 for whichever id you want to inspect (e.g. one you changed in the UI).
+GET {{baseUrl}}/api/bookings/booking_005/history
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{userId}}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional end-to-end: create → transition → read the trail.
+# Run #3 once, then #4, #5, #6 in order. #3 captures the new id automatically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+### 3. Create a booking (its id is saved as {{bookingId}} for the next requests)
+# Re-running this exact request 409s (same sitter + slot overlaps the one you just
+# made) — change scheduledDate / startTime / sitterId to create another.
+POST {{baseUrl}}/api/bookings
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{userId}}
+Content-Type: application/json
+
+{
+  "petId": "pet_002",
+  "sitterId": "sitter_001",
+  "scheduledDate": "2027-03-15T10:00:00Z",
+  "startTime": "02:00",
+  "endTime": "03:00",
+  "notes": "audit http demo"
+}
+
+> {%
+    client.test("created with 201", () => {
+        client.assert(response.status === 201, "expected 201, got " + response.status);
+    });
+    client.global.set("bookingId", response.body.data.id);
+%}
+
+
+### 4. Transition requested → confirmed
+PATCH {{baseUrl}}/api/bookings/{{bookingId}}/status
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{userId}}
+Content-Type: application/json
+
+{ "status": "confirmed" }
+
+
+### 5. Transition confirmed → in_progress (note the different actor)
+PATCH {{baseUrl}}/api/bookings/{{bookingId}}/status
+X-Tenant-Id: {{tenantId}}
+X-User-Id: user_admin_portland
+Content-Type: application/json
+
+{ "status": "in_progress" }
+
+
+### 6. Read the full history for the booking you just created
+GET {{baseUrl}}/api/bookings/{{bookingId}}/history
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{userId}}
+
+> {%
+    client.test("three events recorded, oldest first", () => {
+        const events = response.body.data;
+        client.assert(events.length === 3, "expected 3 events, got " + events.length);
+        client.assert(events[0].previousStatus === null && events[0].newStatus === "requested",
+            "first event should be the creation (null → requested)");
+        client.assert(events[2].changedBy === "user_admin_portland",
+            "last event should be attributed to the admin actor");
+    });
+%}
+
+
+### 7. An invalid transition is rejected (409) and NOT audited
+PATCH {{baseUrl}}/api/bookings/{{bookingId}}/status
+X-Tenant-Id: {{tenantId}}
+X-User-Id: {{userId}}
+Content-Type: application/json
+
+{ "status": "requested" }
+
+
+### 8. Cross-tenant guard: a Seattle caller cannot read this Portland booking's history
+# Expect 404 (no cross-tenant existence disclosure).
+GET {{baseUrl}}/api/bookings/{{bookingId}}/history
+X-Tenant-Id: tenant_seattle
+X-User-Id: user_staff_seattle

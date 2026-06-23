@@ -38,6 +38,17 @@ export interface Booking {
   statusChangedBy: string;
 }
 
+/** One immutable entry in a booking's status history (the audit log). */
+export interface BookingStatusEvent {
+  id: string;
+  bookingId: string;
+  tenantId: string;
+  previousStatus: BookingStatus | null; // null = creation
+  newStatus: BookingStatus;
+  changedBy: string;
+  changedAt: string;
+}
+
 export interface Sitter {
   id: string;
   tenantId: string;
